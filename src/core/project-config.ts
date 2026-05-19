@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import type { CheckEntry } from './code-checker/types.js';
 
 /**
  * Zod schema for project configuration.
@@ -38,9 +39,23 @@ export const ProjectConfigSchema = z.object({
     )
     .optional()
     .describe('Per-artifact rules, keyed by artifact ID'),
+
+  // Optional: static analysis checks to run against implementation
+  checks: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        command: z.string().min(1),
+        files: z.array(z.string()).optional(),
+      })
+    )
+    .optional()
+    .describe('Static analysis checks (lint, type-check, etc.)'),
 });
 
-export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
+export type ProjectConfig = z.infer<typeof ProjectConfigSchema> & {
+  checks?: CheckEntry[];
+};
 
 const MAX_CONTEXT_SIZE = 50 * 1024; // 50KB hard limit
 
@@ -149,6 +164,28 @@ export function readProjectConfig(projectRoot: string): ProjectConfig | null {
         }
       } else {
         console.warn(`Invalid 'rules' field in config (must be object)`);
+      }
+    }
+
+    // Parse checks field using Zod
+    if (raw.checks !== undefined) {
+      const checksField = z.array(
+        z.object({
+          name: z.string().min(1),
+          command: z.string().min(1),
+          files: z.array(z.string()).optional(),
+        })
+      );
+      const checksResult = checksField.safeParse(raw.checks);
+      if (checksResult.success) {
+        const validChecks = checksResult.data.filter(
+          (c) => c.name.length > 0 && c.command.length > 0
+        );
+        if (validChecks.length > 0) {
+          config.checks = validChecks;
+        }
+      } else {
+        console.warn(`Invalid 'checks' field in config (must be an array of {name, command, files?})`);
       }
     }
 
